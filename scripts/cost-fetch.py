@@ -30,7 +30,7 @@ import t3_costs
 
 
 SCHEMA_VERSION = 1
-SCAN_CACHE_VERSION = 7  # v7 stores each record's billing provider and origin (Oh My Pi splits by provider).
+SCAN_CACHE_VERSION = 8  # v8 stores each record's project alongside billing provider and origin.
 RATE_CACHE_VERSION = 2  # v1 discarded provider prefixes and could cache conflicting rates.
 PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode")
 PROVIDER_NAMES = {
@@ -89,6 +89,7 @@ class UsageRecord:
     dedupe_key: str | None
     record_count: int = 1
     origin: str = "local"
+    project: str = ""
 
     @property
     def total_tokens(self) -> int:
@@ -279,13 +280,15 @@ def serialize_record(record: UsageRecord) -> list[Any]:
         record.dedupe_key,
         record.provider,
         record.origin,
+        record.project,
     ]
 
 
 def deserialize_record(row: Any) -> UsageRecord | None:
-    if not isinstance(row, list) or len(row) != 12:
+    if not isinstance(row, list) or len(row) not in (12, 13):
         return None
     provider, origin = row[10], row[11]
+    project = row[12] if len(row) == 13 and isinstance(row[12], str) else ""
     if provider not in PROVIDER_ORDER or origin not in ("local", "omp"):
         return None
     timestamp = finite_number(row[0])
@@ -313,6 +316,7 @@ def deserialize_record(row: Any) -> UsageRecord | None:
         reported_cost_usd=reported,
         dedupe_key=dedupe,
         origin=origin,
+        project=project,
     )
 
 
@@ -983,6 +987,160 @@ def discover_transcripts(
     return candidates, live, errors, complete
 
 
+def decode_claude_dir(name: str) -> str:
+    # Transcript folders encode the workdir: "-home-parm-Code" -> "Code".
+    decoded = ("/" + name[1:]) if name.startswith("-") else name
+    decoded = decoded.replace("-", "/")
+    return decoded.rsplit("/", 1)[-1] or decoded
+
+
+def codex_file_project(path: Path) -> str:
+    # Rollouts live under date folders, so read the cwd from session_meta.
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(8192).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    for line in head.splitlines():
+        try:
+            document = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(document, dict) and document.get("type") == "session_meta":
+            cwd = ((document.get("payload") or {}).get("cwd")) if isinstance(document.get("payload"), dict) else None
+            if isinstance(cwd, str) and cwd:
+                return cwd.rsplit("/", 1)[-1]
+            break
+    return ""
+
+
+def project_name_for(provider: str, path: Path) -> str:
+    if provider == "claude":
+        return decode_claude_dir(path.parent.name)
+    if provider == "codex":
+        return codex_file_project(path)
+    if provider == "kimi":
+        for part in path.parts:
+            if part.startswith("session_"):
+                return part
+        return path.parent.name
+    return ""
+
+
+def extract_claude_titles(path: Path) -> dict[str, str]:
+    # {raw session id: ai title} from a freshly parsed transcript.
+    titles: dict[str, str] = {}
+    try:
+        with path.open("rb") as handle:
+            for raw in handle:
+                if b"ai-title" not in raw[:64]:
+                    continue
+                try:
+                    document = json.loads(raw)
+                except ValueError:
+                    continue
+                if (
+                    isinstance(document, dict)
+                    and document.get("type") == "ai-title"
+                    and document.get("sessionId")
+                    and document.get("aiTitle")
+                ):
+                    titles[str(document["sessionId"])] = str(document["aiTitle"])[:120]
+    except OSError:
+        pass
+    return titles
+
+
+def codex_thread_titles() -> dict[str, str]:
+    # Thread titles live in Codex's own state database, not in the rollouts.
+    try:
+        home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser()
+        paths = sorted(home.glob("state_*.sqlite"))
+        if not paths:
+            return {}
+        connection = sqlite3.connect(f"file:{paths[-1]}?mode=ro", uri=True, timeout=2)
+    except (sqlite3.Error, OSError):
+        return {}
+    titles: dict[str, str] = {}
+    try:
+        connection.execute("PRAGMA query_only = ON")
+        connection.row_factory = sqlite3.Row
+        for row in connection.execute("SELECT * FROM threads"):
+            keys = row.keys()
+            thread_id = next((row[k] for k in ("id",) if k in keys and row[k]), None)
+            title = next(
+                (row[k] for k in ("name", "title", "first_user_message") if k in keys and row[k]),
+                None,
+            )
+            if thread_id and title:
+                short = str(title)[:120]
+                titles.setdefault(str(thread_id), short)
+                titles.setdefault(opaque_id("codex:" + str(thread_id)), short)
+    except sqlite3.Error:
+        pass
+    finally:
+        try:
+            connection.close()
+        except sqlite3.Error:
+            pass
+    return titles
+
+
+def opencode_session_info(db_path: Path) -> dict[str, dict[str, str]]:
+    # {opaque session id: {title, directory}} from the OpenCode database.
+    info: dict[str, dict[str, str]] = {}
+    try:
+        connection = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
+    except sqlite3.Error:
+        return info
+    try:
+        connection.execute("PRAGMA query_only = ON")
+        for session_id, title, directory in connection.execute(
+            "SELECT id, title, directory FROM session"
+        ):
+            if not isinstance(session_id, str) or not session_id:
+                continue
+            key = opaque_id("opencode:" + session_id)
+            name = ""
+            if isinstance(directory, str) and directory:
+                name = directory.rsplit("/", 1)[-1]
+            entry = {
+                "title": str(title or "")[:120],
+                "project": name,
+            }
+            info[key] = entry
+            info[session_id] = entry
+    except sqlite3.Error:
+        pass
+    finally:
+        try:
+            connection.close()
+        except sqlite3.Error:
+            pass
+    return info
+
+
+def load_titles(state_dir: Path | None) -> dict[str, dict[str, str]]:
+    try:
+        raw = json.loads(state_path("cost-titles.json", state_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+
+
+def save_titles(state_dir: Path | None, titles: dict[str, dict[str, str]]) -> None:
+    try:
+        path = state_path("cost-titles.json", state_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(titles), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def scan_transcripts(
     provider_ids: list[str], state_dir: Path | None, now_ms: int
 ) -> tuple[list[UsageRecord], list[dict[str, Any]]]:
@@ -998,6 +1156,11 @@ def scan_transcripts(
 
     # Oh My Pi transcripts are one source whose records bill to several providers.
     scanned = [*provider_ids, "omp"] if provider_ids and omp_sessions_root().is_dir() else list(provider_ids)
+    titles = load_titles(state_dir)
+    for thread_id, title in codex_thread_titles().items():
+        titles.setdefault("codex", {}).setdefault(thread_id, title)
+    opencode_info: dict[str, dict[str, str]] = {}
+    titles_changed = False
     for provider in scanned:
         root = transcript_root(provider)
         source = {
@@ -1015,6 +1178,10 @@ def scan_transcripts(
                 source.update(status="missing", message="No OpenCode usage database was found.")
                 coverage.append(source)
                 continue
+            for sid, meta in opencode_session_info(root).items():
+                opencode_info[sid] = meta
+                if meta.get("title"):
+                    titles.setdefault("opencode", {}).setdefault(sid, meta["title"])
             key = opaque_id(str(root.absolute()))
             candidates: list[tuple[Path, Any, str]] = [(root, signature, key)]
             discovery_errors = 0
@@ -1107,6 +1274,21 @@ def scan_transcripts(
                 cache_changed = True
             source["scannedFiles"] += 1
             provider_record_count += len(parsed)
+            if provider == "opencode" and opencode_info:
+                parsed = [
+                    replace(r, project=opencode_info[r.session_id]["project"])
+                    if not r.project and opencode_info.get(r.session_id, {}).get("project")
+                    else r
+                    for r in parsed
+                ]
+            elif provider in ("claude", "codex", "kimi"):
+                if not cache_hit and provider == "claude":
+                    for raw_sid, title in extract_claude_titles(path).items():
+                        titles.setdefault("claude", {}).setdefault(raw_sid, title)
+                        titles.setdefault("claude", {}).setdefault(opaque_id("claude:" + raw_sid), title)
+                proj = project_name_for(provider, path)
+                if proj:
+                    parsed = [r if r.project else replace(r, project=proj) for r in parsed]
             records.extend(parsed)
 
         incomplete = source["skippedFiles"] > 0
@@ -1142,6 +1324,7 @@ def scan_transcripts(
             save_scan_cache(cache_path, cache)
         except OSError:
             pass
+    save_titles(state_dir, titles)
     return records, coverage
 
 
@@ -1557,6 +1740,7 @@ def aggregate_usage(
     rates: dict[str, tuple[float, float, float, float]],
     zone_name: str | None = None,
     overrides: dict[str, tuple[float, float, float, float]] | None = None,
+    titles: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     zone = local_zone(zone_name)
     period, period_keys, bucket_for = period_window(days, now_ms, zone)
@@ -1568,6 +1752,8 @@ def aggregate_usage(
     }
     total = empty_cell()
     seen: set[str] = set()
+    project_cells: dict[str, dict[str, Any]] = {}
+    session_cells: dict[tuple[str, str], dict[str, Any]] = {}
 
     for record in records:
         if record.provider not in provider_cells:
@@ -1584,11 +1770,54 @@ def aggregate_usage(
         if model_key not in model_cells and len(model_cells) >= MAX_MODEL_GROUPS:
             model_key = (record.provider, "<other>")
         model_cell = model_cells.setdefault(model_key, empty_cell())
+        if record.project:
+            project_cell = project_cells.setdefault(
+                record.project, {"tokens": 0, "sessions": set(), "records": 0}
+            )
+            project_cell["tokens"] += record.total_tokens
+            project_cell["records"] += 1
+            if record.session_id:
+                project_cell["sessions"].add(record.session_id)
+        if record.session_id:
+            session_key = (record.provider, record.session_id)
+            session_cell = session_cells.setdefault(
+                session_key, {"tokens": 0, "records": 0}
+            )
+            session_cell["tokens"] += record.total_tokens
+            session_cell["records"] += 1
         add_record(provider_cell, record, rates, overrides)
         add_record(model_cell, record, rates, overrides)
         add_record(period_cells[bucket], record, rates, overrides)
         add_record(period_provider_cells[bucket][record.provider], record, rates, overrides)
         add_record(total, record, rates, overrides)
+
+    titles = titles or {}
+    projects = [
+        {
+            "name": name,
+            "totalTokens": cell["tokens"],
+            "sessions": len(cell["sessions"]),
+            "records": cell["records"],
+        }
+        for name, cell in sorted(
+            project_cells.items(), key=lambda item: item[1]["tokens"], reverse=True
+        )
+    ]
+    sessions = []
+    for (provider, session_id), cell in sorted(
+        session_cells.items(), key=lambda item: item[1]["tokens"], reverse=True
+    )[:50]:
+        title = " ".join(str((titles.get(provider) or {}).get(session_id, "")).split())
+        sessions.append(
+            {
+                "id": session_id,
+                "title": title,
+                "provider": provider,
+                "providerName": PROVIDER_NAMES.get(provider, provider.replace("-", " ").title()),
+                "totalTokens": cell["tokens"],
+                "records": cell["records"],
+            }
+        )
 
     providers: list[dict[str, Any]] = []
     for provider in provider_ids:
@@ -1634,6 +1863,8 @@ def aggregate_usage(
         "providers": providers,
         "models": models,
         "periods": periods,
+        "projects": projects,
+        "sessions": sessions,
     }
 
 
@@ -1774,7 +2005,8 @@ def build_payload(
     else:
         rates, pricing = {}, {"status": "notNeeded", "source": LITELLM_RATES_URL,
                              "fetchedAt": None, "knownModels": 0, "message": "Public prices are not needed for this selection."}
-    result = aggregate_usage(records, provider_ids, days, stamp, rates, zone_name, overrides)
+    result = aggregate_usage(records, provider_ids, days, stamp, rates, zone_name, overrides,
+                             titles=load_titles(state_dir))
     coverage = []
     for provider in result["providers"]:
         relevant = [s for s in sources if s["status"] != "duplicate"

@@ -323,6 +323,101 @@ def parse_claude_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, An
     return windows, credits
 
 
+CLAUDE_PROBE_CACHE = "quotatank-claude.json"
+# A probe this fresh still describes the account; reuse it instead of
+# re-hitting an endpoint that rate-limits readily.
+CLAUDE_PROBE_REUSE_SECONDS = 300
+
+
+def claude_cache_path() -> Path:
+    root = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "omarchy" / "agent-usage"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / CLAUDE_PROBE_CACHE
+
+
+def read_claude_cache() -> dict[str, Any]:
+    try:
+        raw = json.loads(claude_cache_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def write_claude_cache(payload: dict[str, Any]) -> None:
+    try:
+        tmp = claude_cache_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, claude_cache_path())
+    except OSError:
+        pass
+
+
+def claude_account_email() -> str:
+    try:
+        account_data = read_json(Path.home() / ".claude.json")
+        oauth_account = account_data.get("oauthAccount") if isinstance(account_data, dict) else None
+        if isinstance(oauth_account, dict):
+            return str(oauth_account.get("emailAddress") or "")
+    except (OSError, ValueError, RecursionError):
+        pass
+    return ""
+
+
+def cached_claude_result(provider_id: str, login: dict[str, Any], cached: dict[str, Any], notice: str) -> dict[str, Any]:
+    result = base_provider(provider_id)
+    result.update(
+        plan=str(cached.get("plan") or "") or claude_plan(login),
+        account=claude_account_email(),
+        source="Claude OAuth usage API (cached)",
+        windows=cached.get("windows") if isinstance(cached.get("windows"), list) else [],
+        credits=cached.get("credits"),
+        notice=notice,
+    )
+    return result
+
+
+def official_claude_fallback() -> list[dict[str, Any]]:
+    # Omarchy's own omarchy-agent-usage-claude keeps last-known limits in its
+    # probe cache; borrow them when this plugin has never measured any itself.
+    # Window ids mirror this script's flat-row convention.
+    try:
+        path = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "omarchy" / "agent-usage" / "claude-limits.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, dict):
+        return []
+    fetched_ms = raw.get("fetchedAtMs")
+    try:
+        age = time.time() - float(fetched_ms) / 1000
+    except (TypeError, ValueError):
+        return []
+    if age < 0 or age > 24 * 3600:
+        return []
+    entries = raw.get("limits")
+    if not isinstance(entries, list):
+        return []
+    id_for = {
+        "session (5-hour)": ("session", "5-hour limit", FIVE_HOURS),
+        "weekly (7-day)": ("weekly", "Weekly limit", SEVEN_DAYS),
+    }
+    windows = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        mapped = id_for.get(str(entry.get("label") or "").lower())
+        if mapped is None:
+            continue
+        percent = entry.get("percent")
+        try:
+            used = clamp(float(percent) * (100.0 if float(percent) <= 1 else 1.0), 0.0, 100.0)
+        except (TypeError, ValueError):
+            continue
+        window_id, label, seconds = mapped
+        windows.append(make_window(window_id, label, used, entry.get("resetsAt"), seconds))
+    return windows
+
+
 def fetch_claude(timeout: float) -> dict[str, Any]:
     provider_id = "claude"
     config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")).expanduser()
@@ -337,9 +432,34 @@ def fetch_claude(timeout: float) -> dict[str, Any]:
     except (OSError, ValueError, json.JSONDecodeError):
         return error_provider(provider_id, "no_credentials", "Claude Code credentials could not be read.")
 
+    cached = read_claude_cache()
+    cached_windows = cached.get("windows") if isinstance(cached.get("windows"), list) else []
+    now = int(time.time())
+
     expires_at = epoch_seconds(login.get("expiresAt"))
-    if expires_at is not None and expires_at <= int(time.time()):
+    refresh_expires_at = epoch_seconds(login.get("refreshTokenExpiresAt"))
+    if expires_at is not None and expires_at <= now:
+        # A lapsed access token is routine (about eight hours); the CLI mints
+        # a new one from the refresh token when it runs. Only a lapsed
+        # refresh token needs a real sign-in. Keep showing last-known limits.
+        if refresh_expires_at is not None and refresh_expires_at > now:
+            if cached_windows:
+                return cached_claude_result(
+                    provider_id, login, cached,
+                    "Limits paused — start Claude Code to refresh (no need to sign in again).",
+                )
+            return error_provider(
+                provider_id, "paused",
+                "Claude Code's access token has lapsed. Start Claude Code to refresh it; signing in again is not needed.",
+            )
         return error_provider(provider_id, "expired", "The Claude Code sign-in has expired.")
+
+    # A recent probe still describes the account: reuse it instead of
+    # pestering an endpoint that rate-limits readily (see omarchy's own
+    # omarchy-agent-usage-claude). This absorbs repeated panel opens.
+    fetched_epoch = epoch_seconds(cached.get("fetchedAtEpoch"))
+    if cached_windows and fetched_epoch is not None and 0 <= now - fetched_epoch < CLAUDE_PROBE_REUSE_SECONDS:
+        return cached_claude_result(provider_id, login, cached, "")
 
     try:
         payload = http_json(
@@ -353,27 +473,45 @@ def fetch_claude(timeout: float) -> dict[str, Any]:
         )
         windows, credits = parse_claude_usage(payload)
     except ProviderFailure as exc:
+        # A refused probe must not blank the card: keep the last-known
+        # limits and say how old they are.
+        if cached_windows:
+            if exc.kind == "rate_limited":
+                notice = "Anthropic is rate limiting checks — showing last checked limits."
+            else:
+                notice = "Couldn't reach Anthropic's usage endpoint — showing last checked limits."
+            return cached_claude_result(provider_id, login, cached, notice)
+        official_windows = official_claude_fallback()
+        if official_windows:
+            result = base_provider(provider_id)
+            result.update(
+                plan=claude_plan(login),
+                account=claude_account_email(),
+                source="Claude OAuth usage API (omarchy cache)",
+                windows=official_windows,
+                credits=None,
+                notice="Anthropic is rate limiting checks — showing omarchy's last checked limits.",
+            )
+            return result
         return error_provider(provider_id, exc.kind, exc.message)
-
-    account = ""
-    try:
-        account_data = read_json(Path.home() / ".claude.json")
-        oauth_account = account_data.get("oauthAccount") if isinstance(account_data, dict) else None
-        if isinstance(oauth_account, dict):
-            account = str(oauth_account.get("emailAddress") or "")
-    except (OSError, ValueError, RecursionError):
-        pass
 
     result = base_provider(provider_id)
     result.update(
         plan=claude_plan(login),
-        account=account,
+        account=claude_account_email(),
         source="Claude OAuth usage API",
         windows=windows,
         credits=credits,
     )
     if not windows and credits is None:
         result["notice"] = "Claude returned no active usage limits."
+    else:
+        write_claude_cache({
+            "fetchedAtEpoch": int(time.time()),
+            "plan": result["plan"],
+            "windows": windows,
+            "credits": credits,
+        })
     return result
 
 
