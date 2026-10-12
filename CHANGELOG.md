@@ -4,6 +4,21 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Tokens tab** beside Limits and Costs: the period summary in token units, a six-tile summary (tokens, output, estimated cost, sessions, cache hit, active days), the full model breakdown, per-project tokens, and top sessions with titles. Project and session dropdowns start collapsed and remember their state, as do History and the model list.
+- **History trend chart** on Limits: weekly stacked bars with peak and an agent legend, replacing the per-provider blocks.
+- **Per-project and per-session cost data**: the cost payload gains `projects` (every project directory with tokens, sessions, records) and `sessions` (top 50 by tokens with Claude ai-titles, Codex thread names, and OpenCode titles).
+- **Resilient Claude probes**: a 5-minute reuse window, last-known limits on rate-limit/network failures (falling back to omarchy's own limits cache), and a `paused` state that distinguishes a routinely lapsed access token from a truly expired sign-in.
+
+### Changed
+
+- Token details and the model breakdown moved out of Costs into Tokens; the model list shows every model as full-width bars.
+- Limits-tab History, project, session, and model dropdowns persist their open state in widget settings.
+- First-page headers read in all caps.
+
 ## 1.5.3
 
 ### Changed

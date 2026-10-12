@@ -120,7 +120,11 @@ Colors and control borders come from the active Omarchy theme and change with it
 
 ![The Costs tab with a 30-day chart, totals by provider, and the model breakdown, beside the Costs settings page with local history, two T3 servers, and custom prices](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/costs.png)
 
-Costs estimates what your recorded tokens would cost at API rates. It is not a bill, a subscription charge, or a credit balance. Pick 24 hours, 7 days, or 30 days, then open token details or the model breakdown, which lists every model with its provider, tokens, and estimate.
+Costs estimates what your recorded tokens would cost at API rates. It is not a bill, a subscription charge, or a credit balance. Pick 24 hours, 7 days, or 30 days.
+
+## Tokens
+
+The Tokens tab shows the same period in token units: the headline total with a by-day chart and per-provider box, a six-tile summary (tokens, output, estimated cost, sessions, cache hit, active days), the full model breakdown, per-project tokens, and top sessions with titles. Project and session dropdowns start collapsed; every dropdown remembers its open state.
 
 Local Claude Code and Codex history are on by default, OpenCode can be added, and up to four T3 Code servers bring in history from other computers. Prices come from the public LiteLLM table. Under **Custom prices**, set input, output, and optional cache prices in USD per million tokens for an exact model ID.
 
@@ -205,9 +209,10 @@ Open **Settings → Costs**. Local Codex CLI and Claude Code history are on by d
 |---|---|
 | Open or close the panel | Left click on the bar |
 | Next provider | Middle click on the bar, or `p` on Limits |
-| Switch tabs | `u` for Limits, `c` for Costs |
+| Switch tabs | `u` for Limits, `c` for Costs, `t` for Tokens |
 | Refresh | `r` |
-| Costs metric, token details, model breakdown | `m`, `d`, `b` |
+| Costs metric | `m` |
+| Token details, model breakdown | `d`, `b` on Tokens |
 | Settings | `s` |
 | Back to the settings index, then close | Escape |
 
@@ -216,6 +221,7 @@ Scripts and keybindings can use the shell IPC:
 ```bash
 omarchy-shell janitorhead.quotatank limits
 omarchy-shell janitorhead.quotatank costs
+omarchy-shell janitorhead.quotatank tokens
 omarchy-shell janitorhead.quotatank refresh
 ```
 

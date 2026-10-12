@@ -144,11 +144,13 @@ The dollar fields are API-equivalent estimates, not subscription charges. Nullab
   },
   "providers": [],
   "models": [],
-  "periods": []
+  "periods": [],
+  "projects": [],
+  "sessions": []
 }
 ```
 
-`providers` contains the same metrics as `totals`, identity fields, and the matching coverage `status`/`message`. `models` contains the metrics plus provider/model identity. `periods` contains one filled bucket for each hour in the rolling 24-hour view or each calendar day in the 7/30-day views. Every period also has a `providers` array for the stacked chart.
+`providers` contains the same metrics as `totals`, identity fields, and the matching coverage `status`/`message`. `models` contains the metrics plus provider/model identity. `periods` contains one filled bucket for each hour in the rolling 24-hour view or each calendar day in the 7/30-day views. Every period also has a `providers` array for the stacked chart. `projects` lists every project directory with token totals, session counts, and record counts, sorted by tokens. `sessions` lists the top 50 sessions by tokens with titles (Claude ai-titles, Codex thread names, OpenCode titles) and falls back to short session ids.
 
 Pricing statuses are `fresh`, `cached`, `unavailable`, or `notNeeded`. Coverage statuses are `ok`, `partial`, `missing`, or `failed`; unreadable files make coverage `partial` or `failed` rather than silently producing a complete-looking total. `scannedFiles` counts readable recent transcript files, including files with no usage-bearing rows, while `skippedFiles` counts files or directories that could not be inspected. `costSource` is `none`, `providerReported`, `modelPriced`, `customPriced`, `mixed`, or `unpriced`. Token totals always include unpriced records from readable files. `reasoningTokens` is informational and is already included in `outputTokens`; it must not be summed again.
 
