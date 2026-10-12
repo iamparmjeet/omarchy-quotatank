@@ -15,8 +15,7 @@ Item {
   property string errorText: ""
   property int periodDays: 30
   property string metric: "cost"
-  property bool tokenDetailsExpanded: false
-  property bool modelsExpanded: false
+  property bool showControls: true
   readonly property bool menuOpen: metricMenu.menuOpen
   readonly property int displayedPeriodDays: payload && payload.period && Number(payload.period.days) > 0
     ? Number(payload.period.days) : periodDays
@@ -39,7 +38,6 @@ Item {
   signal menuClosed()
 
   implicitHeight: content.implicitHeight
-  onMetricChanged: tokenDetailsExpanded = metric === "tokens"
   onVisibleChanged: if (!visible) closeMenu()
 
   function openMetricMenu() { metricMenu.openMenu() }
@@ -125,6 +123,7 @@ Item {
 
     Item {
       id: costControls
+      visible: root.showControls
       width: parent.width
       implicitHeight: Math.max(metricMenu.implicitHeight, periodSwitch.implicitHeight)
 
@@ -491,175 +490,6 @@ Item {
       }
     }
 
-    Column {
-      visible: root.hasResult
-      width: parent.width
-      spacing: Style.spacing.lg
-
-      UsageDisclosure {
-        objectName: "costTokenDisclosure"
-        width: parent.width
-        text: "Token details"
-        checked: root.tokenDetailsExpanded
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onToggled: root.tokenDetailsExpanded = checked
-      }
-
-      Grid {
-        objectName: "costTokenDetails"
-        visible: root.tokenDetailsExpanded
-        width: parent.width
-        columns: 2
-        columnSpacing: Style.spacing.xxl
-        rowSpacing: Style.spacing.lg
-
-        Repeater {
-          model: [
-            { label: "Processed", value: UsageLogic.formatTokens(root.totals.totalTokens) },
-            { label: "Cached input", value: UsageLogic.formatTokens(root.totals.cachedInputTokens) },
-            { label: "Uncached input", value: UsageLogic.formatTokens(root.totals.uncachedInputTokens) },
-            { label: "Output", value: UsageLogic.formatTokens(root.totals.outputTokens) },
-            { label: "Reasoning output", value: UsageLogic.formatTokens(root.totals.reasoningTokens) },
-            { label: "Cache savings", value: UsageLogic.formatUsd(root.totals.cacheSavingsUsd) }
-          ]
-
-          delegate: Column {
-            required property var modelData
-            width: (content.width - Style.spacing.xxl) / 2
-            spacing: Style.spacing.labelGap
-
-            Text {
-              text: parent.modelData.label
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            Text {
-              text: parent.modelData.value
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              font.weight: Font.Medium
-            }
-          }
-        }
-      }
-      Column {
-        visible: root.tokenDetailsExpanded
-        width: parent.width
-        spacing: Style.spacing.md
-
-        Repeater {
-          model: root.providers
-          delegate: Text {
-            required property var modelData
-            width: parent.width
-            text: String(modelData.name || modelData.id || "") + " · " + root.providerMetaText(modelData)
-            textFormat: Text.PlainText
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-        }
-      }
-    }
-
-    Column {
-      visible: root.hasResult && root.models.length > 0
-      width: parent.width
-      spacing: Style.spacing.lg
-
-      UsageDisclosure {
-        objectName: "costModelDisclosure"
-        width: parent.width
-        text: "Model breakdown · " + root.models.length + (root.models.length === 1 ? " model" : " models")
-        checked: root.modelsExpanded
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onToggled: root.modelsExpanded = checked
-      }
-
-      Ui.BorderSurface {
-        id: modelSurface
-        objectName: "costModelDetails"
-        visible: root.modelsExpanded
-        width: parent.width
-        implicitHeight: modelRows.implicitHeight + contentTopInset + contentBottomInset
-        color: Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
-        borderSpec: Border.flat(root.alpha(root.foreground, 0.22), Style.spacing.hairline)
-        padding: Style.spacing.xl
-        radius: Style.cornerRadius
-
-        Column {
-          id: modelRows
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.top: parent.top
-          anchors.leftMargin: modelSurface.contentLeftInset
-          anchors.rightMargin: modelSurface.contentRightInset
-          anchors.topMargin: modelSurface.contentTopInset
-          spacing: Style.spacing.lg
-
-          Repeater {
-            model: root.modelsExpanded ? root.models : []
-
-            delegate: Item {
-              required property var modelData
-              required property int index
-              objectName: "costModel-" + index
-              width: modelRows.width
-              implicitHeight: Math.max(modelName.implicitHeight + modelMeta.implicitHeight
-                + Style.spacing.labelGap, modelValue.implicitHeight)
-
-              TextEdit {
-                id: modelName
-                anchors.left: parent.left
-                anchors.right: modelValue.left
-                anchors.rightMargin: Style.spacing.controlGap
-                text: String(parent.modelData.model || "Unknown model")
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                readOnly: true
-                selectByMouse: true
-                textFormat: TextEdit.PlainText
-                wrapMode: TextEdit.Wrap
-              }
-
-              Text {
-                id: modelMeta
-                anchors.left: parent.left
-                anchors.top: modelName.bottom
-                anchors.topMargin: Style.spacing.labelGap
-                text: String(parent.modelData.providerName || "") + " · "
-                  + UsageLogic.formatTokens(parent.modelData.totalTokens) + " tokens"
-                  + (Number(parent.modelData.customPricedRecords || 0) > 0 ? " · custom prices"
-                    : Number(parent.modelData.basePricedRecords || 0) > 0 ? " · base rates"
-                    : parent.modelData.costSource === "providerReported" ? " · reported cost" : "")
-                anchors.right: parent.right
-                wrapMode: Text.WordWrap
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Text {
-                id: modelValue
-                anchors.right: parent.right
-                anchors.top: parent.top
-                text: root.primaryValue(parent.modelData)
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.weight: Font.Medium
-              }
-            }
-          }
-        }
-      }
-    }
 
     Text {
       visible: root.hasResult && Number(root.totals.records || 0) === 0

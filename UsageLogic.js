@@ -927,6 +927,7 @@ function barProviders(providers, selector) {
 var ERROR_REASON_LABELS = {
   rate_limited: "rate limited",
   expired: "sign in",
+  paused: "paused",
   no_credentials: "sign in",
   timeout: "timeout",
   network: "offline",

@@ -28,13 +28,32 @@ Ui.Panel {
     ? backend.providers : UsageLogic.selectedProviders(backend.providers, backend.enabledProviderIds)), providerOrder)
   property string selectedProviderId: ""
   property bool expandedAccountLimits: false
-  property string historyMode: "h24"
+  property bool historyExpanded: setting("historyExpanded", false) !== false
+
+  function setHistoryExpanded(on) {
+    historyExpanded = on
+    saveHistoryState.command = ["omarchy", "bar", "set", moduleName, "historyExpanded", on ? "true" : "false", "--json"]
+    saveHistoryState.running = true
+  }
+
+  property bool projectsOpen: setting("projectsOpen", false) === true
+  property bool sessionsOpen: setting("sessionsOpen", false) === true
+
+  function setProjectsOpen(on) {
+    projectsOpen = on
+    saveProjectsState.command = ["omarchy", "bar", "set", moduleName, "projectsOpen", on ? "true" : "false", "--json"]
+    saveProjectsState.running = true
+  }
+
+  function setSessionsOpen(on) {
+    sessionsOpen = on
+    saveSessionState.command = ["omarchy", "bar", "set", moduleName, "sessionsOpen", on ? "true" : "false", "--json"]
+    saveSessionState.running = true
+  }
   property string viewMode: "limits"
   property string settingsReturnView: "limits"
-  readonly property bool historyAvailable: viewMode === "limits" && !accountOverview && !!provider
-    && !!provider.history
-    && ((UsageLogic.isListLike(provider.history.h24) && provider.history.h24.length > 0)
-      || (UsageLogic.isListLike(provider.history.d7) && provider.history.d7.length > 0))
+  readonly property bool historyAvailable: viewMode === "limits" && !accountOverview
+    && !!costBackend.payload && UsageLogic.listOrEmpty(costBackend.payload.periods).length > 0
   readonly property bool tokensAvailable: viewMode === "limits" && !accountOverview && !!provider
     && provider.status !== "error" && providerModels.length > 0
   readonly property bool configuring: viewMode === "settings"
@@ -44,7 +63,8 @@ Ui.Panel {
 
   readonly property var viewOptions: [
     { value: "limits", label: "Limits" },
-    { value: "costs", label: "Costs" }
+    { value: "costs", label: "Costs" },
+    { value: "tokens", label: "Tokens" }
   ]
   readonly property bool hideAccountEmails: setting("hideAccountEmails", true) !== false
   readonly property real usageCardRadius: setting("squareUsageCards", true) === true ? 0 : Style.cornerRadius
@@ -267,7 +287,7 @@ Ui.Panel {
   }
 
   function refreshNow() {
-    if (viewMode === "costs") costBackend.refresh()
+    if (viewMode === "costs" || viewMode === "tokens") costBackend.refresh()
     else backend.refresh()
   }
 
@@ -280,6 +300,12 @@ Ui.Panel {
 
   function showCosts() {
     viewMode = "costs"
+    costBackend.ensureLoaded()
+    open()
+  }
+
+  function showTokens() {
+    viewMode = "tokens"
     costBackend.ensureLoaded()
     open()
   }
@@ -529,7 +555,7 @@ Ui.Panel {
   }
 
   function footerLeft() {
-    if (viewMode === "costs") {
+    if (viewMode === "costs" || viewMode === "tokens") {
       if (costBackend.fetchError !== "") return costBackend.fetchError
       if (costBackend.lastSuccessAt > 0)
         return "Updated " + Qt.formatTime(new Date(costBackend.lastSuccessAt), "HH:mm")
@@ -542,7 +568,7 @@ Ui.Panel {
 
   // A countdown, written so it cannot be read as a clock time beside "Updated 14:56".
   function footerRight() {
-    if (viewMode === "costs") return ""
+    if (viewMode === "costs" || viewMode === "tokens") return ""
     if (backend.nextRefreshAt <= 0) return ""
     var seconds = Math.max(0, Math.floor((backend.nextRefreshAt - nowMs) / 1000))
     if (seconds < 60) return "Next refresh in " + Math.max(1, seconds) + " s"
@@ -575,7 +601,7 @@ Ui.Panel {
   onViewModeChanged: {
     if (costsView) costsView.closeMenu()
     if (viewMode !== "settings") configForm.discardKey()
-    if (viewMode === "costs") costBackend.ensureLoaded()
+    if (viewMode === "costs" || viewMode === "tokens") costBackend.ensureLoaded()
     if (panelFlick) panelFlick.contentY = 0
   }
 
@@ -866,11 +892,10 @@ Ui.Panel {
       onTextKey: function(text) {
         if (text === "r" || text === "R") root.refreshNow()
         else if (text === "c" || text === "C") root.showCosts()
+        else if (text === "t" || text === "T") root.showTokens()
         else if (text === "u" || text === "U") root.showLimits()
         else if ((text === "p" || text === "P") && root.viewMode === "limits" && root.providers.length > 1) root.nextProvider()
         else if (root.viewMode === "costs" && (text === "m" || text === "M")) costsView.openMetricMenu()
-        else if (root.viewMode === "costs" && (text === "d" || text === "D")) costsView.tokenDetailsExpanded = !costsView.tokenDetailsExpanded
-        else if (root.viewMode === "costs" && (text === "b" || text === "B")) costsView.modelsExpanded = !costsView.modelsExpanded
         else if (text === "s" || text === "S") root.showSettings()
       }
 
@@ -954,22 +979,22 @@ Ui.Panel {
                 spacing: Style.spacing.xs
 
                 Ui.PanelActionButton {
-                  objectName: root.viewMode === "costs" ? "costSettingsButton" : "usageSettingsButton"
+                  objectName: root.viewMode === "limits" ? "usageSettingsButton" : "costSettingsButton"
                   iconText: "󰒓"
-                  tooltipText: root.viewMode === "costs" ? "Settings · Costs" : "Settings"
+                  tooltipText: root.viewMode === "limits" ? "Settings" : "Settings · Costs"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   fontSize: Style.font.body
-                  onClicked: root.viewMode === "costs" ? root.showCostSettings() : root.showSettings()
+                  onClicked: root.viewMode === "limits" ? root.showSettings() : root.showCostSettings()
                 }
 
                 Ui.PanelActionButton {
                   iconText: "󰑐"
-                  tooltipText: root.viewMode === "costs" ? "Refresh estimated costs" : "Refresh usage"
+                  tooltipText: root.viewMode === "limits" ? "Refresh usage" : "Refresh estimated costs"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   fontSize: Style.font.body
-                  enabled: !(root.viewMode === "costs" ? costBackend.loading : backend.loading)
+                  enabled: !(root.viewMode === "limits" ? backend.loading : costBackend.loading)
                   onClicked: root.refreshNow()
                 }
               }
@@ -1020,6 +1045,26 @@ Ui.Panel {
               font.pixelSize: Style.font.heading
               font.bold: true
               wrapMode: Text.WordWrap
+            }
+
+            Column {
+              visible: root.viewMode === "limits" && costBackend.payload && costBackend.payload.generatedAt
+              width: parent.width
+              spacing: Style.spacing.lg
+
+              Ui.PanelSectionHeader {
+                text: "SUMMARY"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              UsageSummary {
+                width: parent.width
+                totals: costBackend.payload ? costBackend.payload.totals : ({})
+                periods: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.periods) : []
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
             }
           }
 
@@ -1156,7 +1201,7 @@ Ui.Panel {
           }
 
           Ui.PanelSeparator {
-            visible: root.viewMode === "limits" && (balanceCard.visible || limitsSection.visible || creditsSection.visible)
+            visible: root.viewMode === "limits" && (balanceCard.visible || limitsSection.visible)
             foreground: root.foreground
           }
 
@@ -1202,28 +1247,6 @@ Ui.Panel {
             }
           }
 
-          Column {
-            id: creditsSection
-            visible: root.viewMode === "limits" && !root.accountOverview && !!root.provider
-              && root.provider.status === "ok" && !!root.provider.credits && !balanceCard.visible
-            width: parent.width
-            spacing: Style.spacing.lg
-
-            UsageDisclosure {
-              id: creditsToggle
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              text: root.provider && root.provider.credits
-                ? String(root.provider.credits.label || "Credits") : "Credits"
-            }
-
-            CreditsCard {
-              width: parent.width
-              credits: root.provider ? root.provider.credits : null
-              visible: creditsToggle.checked
-            }
-          }
 
           Ui.PanelSeparator {
             visible: root.historyAvailable
@@ -1236,18 +1259,47 @@ Ui.Panel {
             width: parent.width
             foreground: root.foreground
             fontFamily: root.fontFamily
-            text: "History"
+            text: "HISTORY"
+            checked: root.historyExpanded
+            onToggled: root.setHistoryExpanded(checked)
           }
 
-          UsageHistory {
+          UsageTrend {
             id: history
-            visible: historyToggle.checked && root.historyAvailable
+            visible: root.historyExpanded && root.historyAvailable
             width: parent.width
-            history: root.provider ? root.provider.history : ({ h24: [], d7: [] })
-            mode: root.historyMode
+            payload: costBackend.payload
             foreground: root.foreground
             fontFamily: root.fontFamily
-            onModeChanged: root.historyMode = mode
+          }
+
+          UsageProjectSessions {
+            visible: root.viewMode === "limits" && !root.accountOverview
+            width: parent.width
+            hasResult: !!(costBackend.payload && costBackend.payload.generatedAt)
+            projects: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.projects) : []
+            sessions: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sessions) : []
+            projectsOpen: root.projectsOpen
+            sessionsOpen: root.sessionsOpen
+            onProjectsToggled: function(open) { root.setProjectsOpen(open) }
+            onSessionsToggled: function(open) { root.setSessionsOpen(open) }
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Process {
+            id: saveHistoryState
+            running: false
+          }
+
+          Process {
+            id: saveProjectsState
+            running: false
+          }
+
+          Process {
+            id: saveSessionState
+            running: false
           }
 
           Ui.PanelSeparator {
@@ -1261,7 +1313,7 @@ Ui.Panel {
             width: parent.width
             foreground: root.foreground
             fontFamily: root.fontFamily
-            text: "Tokens by model"
+            text: "TOKENS BY MODEL"
           }
 
           UsageTokenModels {
@@ -1292,6 +1344,33 @@ Ui.Panel {
               if (root.opened && !root.configuring && !resetBackend.active)
                 keyCatcher.forceActiveFocus()
             })
+          }
+
+          UsageCosts {
+            id: tokensSummaryView
+            visible: root.viewMode === "tokens"
+            width: parent.width
+            payload: costBackend.payload
+            loading: costBackend.loading
+            errorText: costBackend.fetchError
+            periodDays: costBackend.periodDays
+            metric: "tokens"
+            showControls: false
+            foreground: root.foreground
+            urgent: root.urgent
+            surface: root.surface
+            fontFamily: root.fontFamily
+          }
+
+          UsageTokens {
+            id: tokensView
+            visible: root.viewMode === "tokens"
+            width: parent.width
+            payload: costBackend.payload
+            metric: "tokens"
+            foreground: root.foreground
+            urgent: root.urgent
+            fontFamily: root.fontFamily
           }
 
           Ui.PanelSeparator { visible: !root.configuring; foreground: root.foreground }
