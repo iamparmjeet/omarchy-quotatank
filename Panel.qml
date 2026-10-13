@@ -141,14 +141,18 @@ Ui.Panel {
     return UsageLogic.moneySeverity(UsageLogic.spendable(provider), creditWarningUsd, creditCriticalUsd)
   }
 
-  // One overview tile: logo, short name, the most pressing figure on the chosen side, and a mini
+  // One overview tile: logo, short name, the headline figure on the chosen side, and a mini
+  // meter (5-hour window for Claude/Codex, most pressing for the rest).
   // meter. Money providers show dollars on that side too. A failed refresh shows its short reason.
   function providerTile(provider) {
     var id = String(provider.id)
     var failed = String(provider.status) === "error"
     var mode = quotaModeFor(id)
     var money = failed ? null : UsageLogic.moneyView(provider, mode)
-    var remaining = failed ? null : UsageLogic.minRemaining(provider)
+    // Tiles lead with the 5-hour window for Claude/Codex (weekly already has
+    // its own limit card row); others keep the most constrained window.
+    var tileWindow = (id === "claude" || id === "codex") ? "session" : "auto"
+    var remaining = failed ? null : UsageLogic.remainingForWindow(provider, tileWindow)
     var shown = remaining === null ? null : (mode === "Remaining" ? remaining : UsageLogic.usedFromRemaining(remaining))
     return {
       value: id,
