@@ -6,6 +6,10 @@ All notable changes to this project will be documented here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- Claude and Codex provider tiles lead with the 5-hour window instead of the most constrained one (the weekly limit already has its own limit card row); other providers are unchanged.
+
 ### Added
 
 - **Tokens tab** beside Limits and Costs: the period summary in token units, a six-tile summary (tokens, output, estimated cost, sessions, cache hit, active days), the full model breakdown, per-project tokens, and top sessions with titles. Project and session dropdowns start collapsed and remember their state, as do History and the model list.
