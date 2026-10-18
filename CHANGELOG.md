@@ -9,6 +9,7 @@ All notable changes to this project will be documented here. The format follows
 ### Fixed
 
 - Claude and Codex provider tiles lead with the 5-hour window instead of the most constrained one (the weekly limit already has its own limit card row); other providers are unchanged.
+- OpenCode Go reads the key from the live V2 credential store (`opencode auth export`) before the legacy `auth.json`, so a re-login no longer leaves the widget asking to sign in.
 
 ### Added
 
