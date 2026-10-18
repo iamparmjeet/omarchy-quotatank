@@ -186,8 +186,9 @@ class FailureAndIsolationTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(root)}, clear=False):
                 for name in ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_API_BASE_URL"):
                     os.environ.pop(name, None)
-                with mock.patch.object(usage.urllib.request.OpenerDirector, "open", side_effect=capture):
-                    result = usage.fetch_opencode(1)
+                with mock.patch.object(usage, "opencode_export_token", return_value=""):
+                    with mock.patch.object(usage.urllib.request.OpenerDirector, "open", side_effect=capture):
+                        result = usage.fetch_opencode(1)
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["plan"], "OpenCode Go")
@@ -201,7 +202,8 @@ class FailureAndIsolationTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"XDG_DATA_HOME": temporary}, clear=False):
                 for name in ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_API_BASE_URL"):
                     os.environ.pop(name, None)
-                result = usage.fetch_opencode(1)
+                with mock.patch.object(usage, "opencode_export_token", return_value=""):
+                    result = usage.fetch_opencode(1)
         self.assertEqual(result["errorKind"], "no_credentials")
         self.assertEqual(result["authCommand"], "opencode auth login")
 

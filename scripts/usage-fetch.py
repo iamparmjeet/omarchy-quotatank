@@ -1030,11 +1030,52 @@ def opencode_data_root() -> Path:
     return root / "opencode"
 
 
+def opencode_export_token() -> str:
+    # V2 stores credentials in opencode.db served via `opencode auth export`;
+    # ~/.local/share/opencode/auth.json is a stale V1 leftover. Read-only probe.
+    try:
+        exe = shutil.which("opencode", path=runtime_environment().get("PATH"))
+        if not exe:
+            return ""
+        proc = subprocess.run(
+            [exe, "auth", "export"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    try:
+        raw = proc.stdout[: MAX_LOCAL_JSON_BYTES + 1]
+        if len(raw) > MAX_LOCAL_JSON_BYTES:
+            return ""
+        data = json.loads(raw)
+    except (ValueError, RecursionError):
+        return ""
+    items = data if isinstance(data, list) else data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        if not isinstance(item, dict) or item.get("integrationID") != "opencode-go":
+            continue
+        value = item.get("value")
+        key = value.get("key") if isinstance(value, dict) else None
+        if isinstance(key, str) and key.strip():
+            return key.strip()
+    return ""
+
+
 def opencode_token() -> str:
     for name in ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY"):
         value = os.environ.get(name)
         if value and value.strip():
             return value.strip()
+    live = opencode_export_token()
+    if live:
+        return live
     auth_path = opencode_data_root() / "auth.json"
     if not auth_path.is_file():
         return ""
