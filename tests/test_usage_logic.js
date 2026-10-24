@@ -634,7 +634,7 @@ assert.equal(context.moneyCurrency({ id: "claude" }), "USD", "providers without 
 assert.equal(context.formatMoney(1234.5, "EUR"), "€1,234.50");
 assert.equal(context.formatMoney(-0.004, "USD"), "-$0.0040");
 assert.equal(context.formatMoney(3, "CHF"), "CHF 3.00", "an unknown currency keeps its code");
-assert.equal(context.LOCAL_PROVIDER_IDS.join(","), "claude,codex,kimi,opencode,openrouter,deepseek");
+assert.equal(context.LOCAL_PROVIDER_IDS.join(","), "claude,codex,kimi,opencode,openrouter,deepseek,glm");
 assert.equal(context.providerShortName({ id: "openrouter", name: "OpenRouter" }), "OpenRouter");
 assert.equal(context.providerShortName({ id: "claude", name: "Claude Code" }), "Claude");
 assert.equal(context.providerShortName({ id: "gemini-cli", name: "Gemini CLI" }), "Gemini CLI", "proxy providers keep their name");
@@ -667,3 +667,23 @@ assert.equal(context.moveProvider("[]", ids, "opencode", 1), "[]", "moving past 
 assert.equal(context.moveProvider("[]", ids, "ghost", 1), "[]");
 assert.equal(context.parseProviderOrder('["codex","codex","Bad Id",3]').join(","), "codex", "duplicates and invalid ids are dropped");
 console.log("Provider order: passed");
+
+// Summary selection uses collector totals verbatim and provider-specific period cells.
+const summaryPayload = JSON.parse(fs.readFileSync(path.join(root, "tests/fixtures/normalized-costs.json"), "utf8"));
+const allSummary = context.summaryForProvider(summaryPayload, "all");
+assert.equal(allSummary.totals.totalTokens, 5500000);
+assert.strictEqual(allSummary.totals, summaryPayload.totals, "All must not re-add source/provider totals");
+const claudeSummary = context.summaryForProvider(summaryPayload, "claude");
+assert.equal(claudeSummary.available, true);
+assert.equal(claudeSummary.totals.totalTokens, 3800000);
+assert.equal(claudeSummary.totals.sessions, 2);
+assert.equal(claudeSummary.periods.length, summaryPayload.periods.length);
+assert.equal(claudeSummary.periods[0].totalTokens, summaryPayload.periods[0].providers.find(p => p.id === "claude").totalTokens);
+assert.equal(claudeSummary.periods[0].providers.length, 1);
+assert.equal(context.summaryForProvider(summaryPayload, "glm").available, false, "quota-only providers have unknown consumption");
+const missingSummary = context.summaryForProvider({providers: [{id: "claude", status: "missing", totalTokens: 0}]}, "claude");
+assert.equal(missingSummary.available, false);
+assert.equal(context.summaryForProvider({}, "all").available, false);
+assert.equal(context.summaryForProvider({generatedAt: "now", totals: {totalTokens: 0}}, "all").available, true, "known empty usage stays zero");
+assert.equal(JSON.stringify(summaryPayload.totals), JSON.stringify(allSummary.totals), "filter must not mutate combined totals");
+console.log("Summary provider filtering: passed");

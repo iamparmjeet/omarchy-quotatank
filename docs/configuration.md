@@ -14,10 +14,13 @@ Quotatank is a monitor, not an authentication manager. Its backend code reads cr
 | OpenCode Go | OpenCode's Go usage endpoint (`https://opencode.ai/zen/go/v1/usage`), read-only | `opencode auth login` (or `OPENCODE_GO_API_KEY`) |
 | OpenRouter | OpenRouter's `GET /api/v1/key` and `GET /api/v1/credits`, read-only | Key saved under **Settings → Providers** (or `OPENROUTER_API_KEY`) |
 | DeepSeek | DeepSeek's `GET /user/balance`, read-only | Key saved under **Settings → Providers** (or `DEEPSEEK_API_KEY`) |
+| GLM (local customization) | ZCode's cached balance response in `~/.zcode/v2/logs/`; see the [harness usage guide](harness-usage.md) | Sign in to ZCode and open Usage Stats to refresh its cached response |
 
 Environment overrides owned by the CLIs are honored: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, `KIMI_CODE_BASE_URL`, and `KIMI_SHARE_DIR`.
 
 The OpenCode provider reads the key from `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY` when either is set, else from the live V2 credential store via `opencode auth export` (`opencode-go`), falling back to the legacy `$XDG_DATA_HOME/opencode/auth.json` (`opencode-go`). `OPENCODE_API_BASE_URL` overrides the endpoint and must use `https`; the key is never sent over plain HTTP. Cost history is read from the OpenCode usage database, chosen from `OPENCODE_DB` / `OPENCODE_DATABASE` or the freshest `opencode*.db` under `$XDG_DATA_HOME/opencode`, plus the Oh My Pi harness session transcripts under `${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}` when that directory exists. Each Oh My Pi message is attributed to the provider it was billed to, not to OpenCode: `opencode*` → OpenCode, `openai-codex` → Codex, `anthropic` → Claude (only while `claude` is in `costLocalProviders`); other providers are not counted.
+
+DeepSeek can also read the official local OpenCode Go wallet grant when no explicit DeepSeek API key is configured. This is separate from transcript token history. See the [harness usage guide](harness-usage.md) for precedence, refresh behavior, and coverage limits.
 
 ### OpenRouter
 

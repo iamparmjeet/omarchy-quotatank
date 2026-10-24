@@ -181,6 +181,10 @@
           {
             "value": "deepseek",
             "label": "DeepSeek"
+          },
+          {
+            "value": "glm",
+            "label": "GLM · ZCode"
           }
         ]
       },
@@ -325,6 +329,10 @@
           {
             "value": "deepseek",
             "label": "DeepSeek"
+          },
+          {
+            "value": "glm",
+            "label": "GLM · ZCode"
           }
         ]
       },

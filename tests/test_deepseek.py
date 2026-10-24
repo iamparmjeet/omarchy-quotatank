@@ -86,7 +86,8 @@ class FetchTests(unittest.TestCase):
 
     def test_missing_key_is_a_sign_in_error(self):
         with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "", "DEEPSEEK_API_KEY_FILE": "",
-                                          "XDG_CONFIG_HOME": tempfile.gettempdir()}):
+                                          "XDG_CONFIG_HOME": tempfile.gettempdir()}), \
+             mock.patch.object(usage, "deepseek_harness_token", return_value=""):
             result = usage.fetch_deepseek(3)
         self.assertEqual(result["errorKind"], "no_credentials")
 

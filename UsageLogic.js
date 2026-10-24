@@ -150,6 +150,37 @@ function providerModels(models, providerId) {
   return rows
 }
 
+// Select already aggregated transcript cells. Never sum provider quota balances
+// or re-add source totals: the collector has already selected/deduplicated sources.
+function summaryForProvider(payload, providerId) {
+  payload = payload || {}
+  var periods = listOrEmpty(payload.periods)
+  if (providerId === "all") {
+    return { totals: payload.totals || {}, periods: periods,
+      available: !!payload.generatedAt && !!payload.totals && payload.totals.totalTokens !== null
+        && payload.totals.historyStatus !== "unavailable" && Number(payload.totals.totalTokens) >= 0 }
+  }
+  var providers = listOrEmpty(payload.providers)
+  var total = null
+  for (var i = 0; i < providers.length; i++)
+    if (providers[i].id === providerId) { total = providers[i]; break }
+  var available = !!total && total.status !== "missing" && total.status !== "failed"
+    && total.historyStatus !== "unavailable"
+  var selectedPeriods = []
+  for (var j = 0; j < periods.length; j++) {
+    var period = periods[j]
+    var cells = listOrEmpty(period.providers)
+    var cell = null
+    for (var k = 0; k < cells.length; k++)
+      if (cells[k].id === providerId) { cell = cells[k]; break }
+    var selected = Object.assign({}, cell || {}, { start: period.start,
+      providers: cell ? [cell] : [],
+      historyStatus: period.historyStatus === "unavailable" || !cell ? "unavailable" : cell.historyStatus })
+    selectedPeriods.push(selected)
+  }
+  return { totals: total || {}, periods: selectedPeriods, available: available }
+}
+
 function minRemaining(provider) {
   if (!provider || provider.status !== "ok") return null
   // Repeater delegates expose nested JSON arrays as QML list-like objects on
@@ -1018,7 +1049,8 @@ var LOCAL_PROVIDERS = [
   { id: "kimi", name: "Kimi Code", short: "Kimi" },
   { id: "opencode", name: "OpenCode Go", short: "OpenCode" },
   { id: "openrouter", name: "OpenRouter", short: "OpenRouter", money: true },
-  { id: "deepseek", name: "DeepSeek", short: "DeepSeek", money: true }
+  { id: "deepseek", name: "DeepSeek", short: "DeepSeek", money: true },
+  { id: "glm", name: "GLM · ZCode", short: "GLM" }
 ]
 var LOCAL_PROVIDER_IDS = LOCAL_PROVIDERS.map(function (entry) { return entry.id })
 
@@ -1040,7 +1072,8 @@ var PROVIDER_COLORS = {
   kimi: "#eab308",
   opencode: "#a78bfa",
   openrouter: "#6467f2",
-  deepseek: "#4d6bfe"
+  deepseek: "#4d6bfe",
+  glm: "#6d8cff"
 }
 
 var CURRENCY_PREFIX = { USD: "$", EUR: "€", GBP: "£", CNY: "¥" }

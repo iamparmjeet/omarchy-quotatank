@@ -124,9 +124,9 @@ Costs estimates what your recorded tokens would cost at API rates. It is not a b
 
 ## Tokens
 
-The Tokens tab shows the same period in token units: the headline total with a by-day chart and per-provider box, a six-tile summary (tokens, output, estimated cost, sessions, cache hit, active days), the full model breakdown, per-project tokens, and top sessions with titles. Project and session dropdowns start collapsed; every dropdown remembers its open state.
+The Tokens tab shows the selected period in token units. The summary row starts on **All** and shows combined transcript usage; choose a provider tile such as Claude to show only that provider's totals and daily trend. The provider tile row includes **All** with the combined token total. Below it are the by-day chart, full model breakdown, per-project tokens, and top sessions with titles. Project and session dropdowns start collapsed; every dropdown remembers its open state.
 
-Local Claude Code and Codex history are on by default, OpenCode can be added, and up to four T3 Code servers bring in history from other computers. Prices come from the public LiteLLM table. Under **Custom prices**, set input, output, and optional cache prices in USD per million tokens for an exact model ID.
+Local Claude Code and Codex history are on by default, OpenCode can be added, and up to four T3 Code servers bring in history from other computers. Local GLM and DeepSeek usage sources and their data boundaries are described in the [harness usage guide](docs/harness-usage.md). Prices come from the public LiteLLM table. Under **Custom prices**, set input, output, and optional cache prices in USD per million tokens for an exact model ID.
 
 ## Settings that apply as you go
 

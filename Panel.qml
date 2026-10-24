@@ -26,7 +26,9 @@ Ui.Panel {
   readonly property string providerOrder: String(setting("providerOrder", "[]"))
   readonly property var providers: UsageLogic.orderProviders(UsageLogic.availableProviders(proxyMode
     ? backend.providers : UsageLogic.selectedProviders(backend.providers, backend.enabledProviderIds)), providerOrder)
-  property string selectedProviderId: ""
+  property string selectedProviderId: "all"
+  readonly property bool allProvidersSelected: selectedProviderId === "all"
+  readonly property var summary: UsageLogic.summaryForProvider(costBackend.payload, selectedProviderId)
   property bool expandedAccountLimits: false
   property bool historyExpanded: setting("historyExpanded", false) !== false
 
@@ -58,6 +60,7 @@ Ui.Panel {
     && provider.status !== "error" && providerModels.length > 0
   readonly property bool configuring: viewMode === "settings"
   property alias settingsForm: configForm
+  property alias summaryView: providerUsageSummary
   property alias resetAction: resetBackend
   property double nowMs: Date.now()
 
@@ -113,11 +116,12 @@ Ui.Panel {
     && !(bar && bar.vertical) && percentageProviders.length > 0
   readonly property bool alarming: anyProviderAlarming()
   readonly property int providerIndex: {
+    if (allProvidersSelected) return -1
     for (var i = 0; i < providers.length; i++)
       if (providers[i].id === selectedProviderId) return i
     return 0
   }
-  readonly property var providerSummary: providers.length > 0 ? providers[providerIndex] : null
+  readonly property var providerSummary: !allProvidersSelected && providers.length > 0 ? providers[providerIndex] : null
   readonly property var provider: providerSummary
   // Per-model token activity for the provider on screen, taken from the same
   // estimated-cost scan the Costs tab uses so both views always agree.
@@ -127,7 +131,10 @@ Ui.Panel {
   readonly property bool accountOverview: proxyMode && proxyAccounts.length > 0
   property alias accountCards: accountRepeater
   readonly property var providerOptions: {
-    var result = []
+    var result = [{ value: "all", label: "All", name: "All transcript providers", iconUrl: "",
+      figure: costBackend.payload && costBackend.payload.generatedAt
+        ? UsageLogic.formatTokens(costBackend.payload.totals.totalTokens) : "—",
+      unit: "tokens", fill: 0, alert: false, failed: false }]
     for (var i = 0; i < providers.length; i++) result.push(providerTile(providers[i]))
     return result
   }
@@ -261,13 +268,14 @@ Ui.Panel {
   }
 
   function ensureSelection() {
+    if (allProvidersSelected) return
     if (providers.length === 0) {
-      selectedProviderId = ""
+      selectedProviderId = "all"
       return
     }
     for (var i = 0; i < providers.length; i++)
       if (providers[i].id === selectedProviderId) return
-    selectedProviderId = providers[0].id
+    selectedProviderId = "all"
   }
 
   function selectProvider(index) {
@@ -278,6 +286,11 @@ Ui.Panel {
   }
 
   function selectProviderId(providerId) {
+    if (providerId === "all") {
+      selectedProviderId = "all"
+      if (panelFlick) panelFlick.contentY = 0
+      return
+    }
     for (var i = 0; i < providers.length; i++) {
       if (providers[i].id === providerId) {
         selectProvider(i)
@@ -292,7 +305,10 @@ Ui.Panel {
 
   function refreshNow() {
     if (viewMode === "costs" || viewMode === "tokens") costBackend.refresh()
-    else backend.refresh()
+    else {
+      backend.refresh()
+      costBackend.refresh()
+    }
   }
 
   function showLimits() {
@@ -1025,6 +1041,8 @@ Ui.Panel {
               text: {
                 if (root.viewMode === "costs")
                   return costBackend.loading ? "Loading session history…" : ""
+                if (root.allProvidersSelected) return "Combined transcript usage · "
+                  + String(costBackend.payload && costBackend.payload.period ? costBackend.payload.period.label || "" : "Loading…")
                 var context = root.accountOverview
                   ? root.proxyAccounts.length + " connected accounts" : root.heroMeta(root.provider)
                 if (root.providers.length === 1 && root.provider)
@@ -1064,9 +1082,16 @@ Ui.Panel {
               }
 
               UsageSummary {
+                id: providerUsageSummary
+                objectName: "providerUsageSummary"
                 width: parent.width
-                totals: costBackend.payload ? costBackend.payload.totals : ({})
-                periods: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.periods) : []
+                totals: root.summary.totals
+                periods: root.summary.periods
+                available: root.summary.available
+                scopeLabel: root.allProvidersSelected ? "All transcript providers"
+                  : UsageLogic.providerShortName(root.provider)
+                periodLabel: costBackend.payload && costBackend.payload.period
+                  ? String(costBackend.payload.period.label || "") : ""
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }
@@ -1273,7 +1298,7 @@ Ui.Panel {
             id: history
             visible: root.historyExpanded && root.historyAvailable
             width: parent.width
-            payload: costBackend.payload
+            payload: ({ periods: root.summary.periods, providers: costBackend.payload.providers })
             foreground: root.foreground
             fontFamily: root.fontFamily
           }

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+shell_root=${OMARCHY_PATH:-/usr/share/omarchy}/shell
+test_root=$(mktemp -d -t quotatank-summary-XXXXXXXX)
+trap 'rm -rf -- "$test_root"' EXIT
+cp "$repo_root/tests/qml/summary-shell.qml" "$test_root/shell.qml"
+ln -s "$shell_root/Ui" "$test_root/Ui"
+ln -s "$shell_root/Commons" "$test_root/Commons"
+QT_QPA_PLATFORM=wayland \
+XDG_CONFIG_HOME="$test_root/config" XDG_CACHE_HOME="$test_root/cache" \
+MODEL_USAGE_REPO_URL="file://$repo_root" \
+MODEL_USAGE_FAKE_BACKEND="$repo_root/tests/fake_backend.py" \
+MODEL_USAGE_FAKE_COST_BACKEND="$repo_root/tests/fake_cost_backend.py" \
+MODEL_USAGE_NORMALIZED_FIXTURE="$repo_root/tests/fixtures/normalized-all.json" \
+MODEL_USAGE_COST_FIXTURE="$repo_root/tests/fixtures/normalized-costs.json" \
+QML_IMPORT_PATH="$shell_root" PATH="$repo_root/tests/fake-bin:$PATH" \
+  timeout 12 quickshell -p "$test_root" --no-color >"$test_root/runtime.log" 2>&1 || {
+    cat "$test_root/runtime.log"
+    exit 1
+  }
+cat "$test_root/runtime.log"
+rg -q 'Summary QML contract: passed' "$test_root/runtime.log"
+if rg 'Error:|ReferenceError|TypeError|Binding loop|Unable to assign' "$test_root/runtime.log"; then
+  exit 1
+fi

@@ -30,7 +30,7 @@ from typing import Any, Callable
 from model_usage_common import atomic_write_json, clean_message
 
 SCHEMA_VERSION = 1
-PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode", "openrouter", "deepseek")
+PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode", "openrouter", "deepseek", "glm")
 PROVIDER_NAMES = {
     "claude": "Claude Code",
     "codex": "OpenAI Codex",
@@ -38,6 +38,7 @@ PROVIDER_NAMES = {
     "opencode": "OpenCode Go",
     "openrouter": "OpenRouter",
     "deepseek": "DeepSeek",
+    "glm": "GLM · ZCode",
     "antigravity": "Antigravity",
     "gemini": "Gemini",
     "gemini-cli": "Gemini CLI",
@@ -1397,8 +1398,7 @@ def fetch_deepseek(timeout: float, key_file: Path | None = None) -> dict[str, An
     except ProviderFailure as exc:
         return error_provider(provider_id, exc.kind, exc.message)
     if not token:
-        return error_provider(provider_id, "no_credentials",
-                              "No DeepSeek key was found. Add one under Settings → Providers.")
+        return fetch_deepseek_harness(timeout)
     headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
     try:
         credits, notice = parse_deepseek(http_json(DEEPSEEK_API_BASE + "/user/balance", headers, timeout))
@@ -1409,6 +1409,146 @@ def fetch_deepseek(timeout: float, key_file: Path | None = None) -> dict[str, An
     result = base_provider(provider_id)
     result.update(plan="API key", source="DeepSeek API", credits=credits, notice=notice)
     return result
+
+
+def deepseek_harness_token() -> str:
+    """Read only the official-platform grant in dsh's small YAML store.
+
+    Deliberately support the harness's plain ASCII token format only. Unknown
+    YAML formats fail closed rather than interpreting arbitrary YAML tags.
+    """
+    path = Path.home() / ".dsh" / ".credentials.yaml"
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_LOCAL_JSON_BYTES + 1)
+        if len(raw) > MAX_LOCAL_JSON_BYTES:
+            return ""
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeError):
+        return ""
+    block = re.search(r"(?m)^  deepseek-account-platform/default:\n((?:    .*\n?)+)", text)
+    if not block:
+        return ""
+    fields = block.group(1)
+    if not re.search(r"(?m)^    kind: grant$", fields):
+        return ""
+    if not re.search(r"(?m)^      issuer: https://platform\.deepseek\.com/?$", fields):
+        return ""
+    token = re.search(r"(?m)^      token: ([A-Za-z0-9._~+/=-]{1,8192})$", fields)
+    return token.group(1) if token else ""
+
+
+def parse_deepseek_harness(payload: Any) -> tuple[dict[str, Any], str]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or payload.get("code") != 0 or data.get("biz_code") != 0:
+        kind = "expired" if isinstance(data, dict) and data.get("biz_code") == 40003 else "malformed"
+        raise ProviderFailure(kind, "DeepSeek Harness could not read the account balance. Sign in again in dsh if needed.")
+    summary = data.get("biz_data")
+    if not isinstance(summary, dict):
+        raise ProviderFailure("malformed", "DeepSeek returned no wallet summary.")
+    balances: dict[str, float] = {}
+    for field in ("normal_wallets", "bonus_wallets"):
+        rows = summary.get(field)
+        if not isinstance(rows, list) or len(rows) > 32:
+            raise ProviderFailure("malformed", "DeepSeek returned unreadable wallets.")
+        for row in rows:
+            if not isinstance(row, dict) or row.get("currency") not in ("USD", "CNY"):
+                continue
+            amount = number(row.get("balance"))
+            if amount is None:
+                raise ProviderFailure("malformed", "DeepSeek returned an unreadable balance.")
+            currency = row["currency"]
+            balances[currency] = balances.get(currency, 0.0) + amount
+    if not balances:
+        raise ProviderFailure("malformed", "DeepSeek returned no account balances.")
+    # Prefer a funded wallet, then USD. Never add or convert different currencies.
+    currency = next((c for c in ("USD", "CNY") if balances.get(c, 0) > 0), next(iter(balances)))
+    credits, _ = parse_deepseek({"balance_infos": [{"currency": currency, "total_balance": balances[currency]}]})
+    notice = "Wallet balance from DeepSeek Harness sign-in. " + "; ".join(
+        f"{c} {v:.4f}" for c, v in sorted(balances.items())) + "."
+    return credits, notice
+
+
+def fetch_deepseek_harness(timeout: float) -> dict[str, Any]:
+    token = deepseek_harness_token()
+    if not token:
+        return error_provider("deepseek", "no_credentials", "Sign in to DeepSeek Harness or add a DeepSeek API key in Settings.")
+    try:
+        payload = http_json("https://platform.deepseek.com/api/v0/users/get_user_summary",
+                            {"x-dsh-auth-token": token, "Accept": "application/json"}, timeout)
+        credits, notice = parse_deepseek_harness(payload)
+    except ProviderFailure as exc:
+        return error_provider("deepseek", exc.kind, exc.message)
+    result = base_provider("deepseek")
+    result.update(plan="Harness account", source="DeepSeek Platform API · dsh sign-in", credits=credits, notice=notice)
+    return result
+
+
+def parse_zcode_balance(payload: Any) -> tuple[list[dict[str, Any]], str]:
+    data = payload.get("data") if isinstance(payload, dict) and payload.get("code") == 0 else None
+    if not isinstance(data, dict) or not isinstance(data.get("balances"), list):
+        raise ProviderFailure("malformed", "ZCode returned no model allowances.")
+    now = time.time()
+    plans = {p.get("user_plan_id"): p for p in data.get("plans", []) if isinstance(p, dict)}
+    windows = []
+    for row in data["balances"][:32]:
+        if not isinstance(row, dict):
+            continue
+        plan = plans.get(row.get("user_plan_id"), {})
+        ends = epoch_seconds(row.get("expires_at"))
+        if plan.get("status") != "active" or (ends and ends <= now):
+            continue
+        total, used, remaining = (number(row.get(k)) for k in ("total_units", "used_units", "remaining_units"))
+        if total is None or total <= 0 or used is None or used < 0 or remaining is None or remaining < 0:
+            continue
+        label = clean_message(str(row.get("show_name") or "GLM allowance"))[:100].replace("<", "").replace(">", "")
+        window_id = str(row.get("entitlement_id") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", window_id):
+            continue
+        # This is a one-time trial allowance, not a rolling reset window.
+        window = make_window(window_id, label, used / total * 100, None, None,
+                             f"{remaining:,.0f} / {total:,.0f} tokens left")
+        windows.append(window)
+    if not windows:
+        raise ProviderFailure("unavailable", "ZCode has no active model allowance in its last API response.")
+    names = [clean_message(str(p.get("name") or ""))[:100].replace("<", "").replace(">", "") for p in plans.values() if p.get("status") == "active"]
+    return windows, ", ".join(names)[:200]
+
+
+def fetch_glm(timeout: float) -> dict[str, Any]:
+    """Consume the harness's own API response; no credentials copied or issued."""
+    logs = Path.home() / ".zcode" / "v2" / "logs"
+    paths = sorted(logs.glob("????-??-??.log"), reverse=True)[:2]
+    for path in paths:
+        try:
+            with path.open("rb") as handle:
+                handle.seek(0, 2)
+                handle.seek(max(0, handle.tell() - MAX_LOCAL_JSON_BYTES))
+                lines = handle.read(MAX_LOCAL_JSON_BYTES).decode("utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            if "[usage-stats] billing/balance" not in line or '"payload":' not in line:
+                continue
+            try:
+                entry = json.loads(line[line.index('{'):])
+                payload = entry.get("payload")
+                windows, plan = parse_zcode_balance(payload)
+                stamp = re.match(r"\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\]", line)
+                if not stamp:
+                    continue
+                fetched = datetime.fromisoformat(stamp.group(1)).astimezone()
+            except (ValueError, TypeError, ProviderFailure):
+                continue
+            result = base_provider("glm")
+            age = max(0, int(time.time() - fetched.timestamp()))
+            result.update(plan=plan, source="ZCode harness · cached balance API response", windows=windows,
+                          fetchedAt=fetched.isoformat(), historyEligible=False,
+                          notice=f"ZCode API snapshot from {fetched.strftime('%d %b %H:%M')}. Updates when ZCode checks usage.")
+            if age > 900:
+                result.update(stale=True, notice=result["notice"] + " Over 15 minutes old; open Usage Stats in ZCode to refresh.")
+            return result
+    return error_provider("glm", "unavailable", "Open Usage Stats in ZCode to record a model allowance response.")
 
 
 
@@ -2000,6 +2140,8 @@ def update_and_attach_history(
         samples = [row for row in history["providers"].get(provider_id, []) if cutoff <= row[0] <= stamp + 300]
         provider = by_id.get(provider_id)
         used = dynamic_window_used(provider) if provider else None
+        if provider and provider.get("historyEligible") is False:
+            used = None
         observation = int(provider.get("quotaUpdatedAt", stamp)) if provider else stamp
         if provider and provider.get("proxyImplementation") == "rust" and (provider.get("stale") or (samples and observation <= samples[-1][0])):
             used = None
@@ -2032,7 +2174,7 @@ def update_and_attach_history(
     # Each window keeps its own series: pacing never mixes a window with its siblings.
     for provider_id, provider in by_id.items():
         windows = provider.get("windows")
-        if provider.get("status") != "ok" or not isinstance(windows, list):
+        if provider.get("status") != "ok" or provider.get("historyEligible") is False or not isinstance(windows, list):
             continue
         series_by_window = history["windows"].setdefault(provider_id, {})
         for window in windows:
@@ -2066,6 +2208,7 @@ FETCHERS: dict[str, Callable[[float], dict[str, Any]]] = {
     "opencode": fetch_opencode,
     "openrouter": fetch_openrouter,
     "deepseek": fetch_deepseek,
+    "glm": fetch_glm,
 }
 
 # Providers whose key the widget saves to a private file, and the fetcher that takes that file.

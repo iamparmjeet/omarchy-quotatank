@@ -73,6 +73,7 @@ Column {
     }
 
     Text {
+      id: trendNote
       text: "by week · peak " + UsageLogic.formatTokens(root.peak)
       color: root.dim
       font.family: root.fontFamily
@@ -92,6 +93,7 @@ Column {
       model: root.periods
 
       delegate: Item {
+        id: dayBucket
         required property var modelData
         readonly property real dayFrac: root.peak > 0 ? root.dayTotal(modelData) / root.peak : 0
         width: root.periods.length > 0
@@ -102,7 +104,7 @@ Column {
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: parent.bottom
-          height: Math.max(dayFrac > 0 ? 2 : 0, chart.height * dayFrac)
+          height: Math.max(dayBucket.dayFrac > 0 ? 2 : 0, chart.height * dayBucket.dayFrac)
           radius: 1
           color: root.foreground
         }

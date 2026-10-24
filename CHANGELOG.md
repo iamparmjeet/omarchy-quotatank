@@ -13,6 +13,8 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
+- GLM usage from ZCode's recent cached balance response and a DeepSeek balance fallback using the local OpenCode Go wallet grant when no explicit API key is configured; see `docs/harness-usage.md` for source and freshness details.
+- An **All** provider tile in the Tokens view, showing combined transcript token usage. Selecting a provider filters the summary totals and daily trend to that provider.
 - **Tokens tab** beside Limits and Costs: the period summary in token units, a six-tile summary (tokens, output, estimated cost, sessions, cache hit, active days), the full model breakdown, per-project tokens, and top sessions with titles. Project and session dropdowns start collapsed and remember their state, as do History and the model list.
 - **History trend chart** on Limits: weekly stacked bars with peak and an agent legend, replacing the per-provider blocks.
 - **Per-project and per-session cost data**: the cost payload gains `projects` (every project directory with tokens, sessions, records) and `sessions` (top 50 by tokens with Claude ai-titles, Codex thread names, and OpenCode titles).
